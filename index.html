@@ -185,8 +185,6 @@
 
   /* PROVIDER TAGGING (Clinic card) */
   .provider-section{margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border);}
-  .clinic-stats-section{margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border);}
-  input[type=number]{-webkit-appearance:none;}
   .provider-chip{background:var(--surface2);border:1px solid var(--border);color:#f0f4ff;font-family:'DM Mono',monospace;font-size:0.72rem;padding:0.3rem 0.75rem;border-radius:20px;cursor:pointer;transition:all 0.15s;}
   .provider-chip:hover{border-color:var(--clinic);color:var(--clinic);}
   .provider-item{display:flex;align-items:center;justify-content:space-between;background:rgba(0,201,167,0.08);border:1px solid rgba(0,201,167,0.25);border-radius:6px;padding:0.3rem 0.6rem;margin-bottom:0.3rem;font-family:'DM Mono',monospace;font-size:0.72rem;color:var(--clinic);}
@@ -305,32 +303,6 @@
         </div>
         <!-- Running provider list -->
         <div id="providerList"></div>
-      </div>
-
-      <!-- CLINIC STATS -->
-      <div class="clinic-stats-section">
-        <div class="case-tag-lbl">📊 Clinic Stats</div>
-        <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
-          <div style="flex:1">
-            <div style="font-size:0.58rem;color:#a8bcd8;letter-spacing:1px;margin-bottom:0.25rem;">TOTAL PTS</div>
-            <input type="number" id="clinicTotalPts" placeholder="0" min="0"
-              style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:1rem;font-weight:600;padding:0.4rem 0.5rem;border-radius:6px;text-align:center;outline:none;"
-              oninput="updateClinicSeenPct()">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:0.58rem;color:#a8bcd8;letter-spacing:1px;margin-bottom:0.25rem;">STAFF</div>
-            <input type="number" id="clinicStaff" placeholder="0" min="0"
-              style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:1rem;font-weight:600;padding:0.4rem 0.5rem;border-radius:6px;text-align:center;outline:none;"
-              oninput="updateClinicSeenPct()">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:0.58rem;color:#a8bcd8;letter-spacing:1px;margin-bottom:0.25rem;">YOU SAW</div>
-            <input type="number" id="clinicSaw" placeholder="0" min="0"
-              style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:1rem;font-weight:600;padding:0.4rem 0.5rem;border-radius:6px;text-align:center;outline:none;"
-              oninput="updateClinicSeenPct()">
-          </div>
-        </div>
-        <div id="clinicSeenPct" style="font-size:0.72rem;color:var(--clinic);font-family:'DM Mono',monospace;min-height:1rem;text-align:center;"></div>
       </div>
     </div>
 
@@ -532,7 +504,7 @@
     <div class="pto-tracker-header">
       <div class="slabel" style="margin:0">📅 Monthly Calendar</div>
     </div>
-    <div id="calendarContent" style="min-height:220px;padding-top:0.5rem;"></div>
+    <div id="calendarContent"></div>
   </div>
   <div class="period-card">
     <div class="period-tabs">
@@ -886,12 +858,12 @@ function clearPreviousDayData() {
 const wasNewDay = clearPreviousDayData();
 
 // ── DEDUPLICATE EXISTING ENTRIES ──────────────
-// Remove duplicate entries that were saved before the fix
+// Only remove entries with identical IDs (true duplicates from double-save bug)
 (function dedupeEntries(){
   const seen = new Set();
   const deduped = entries.filter(e => {
-    // Create a unique key from date + totalHrs + type + notes
-    const key = [e.date, e.totalHrs, e.type||'', (e.notes||'').slice(0,30)].join('|');
+    const key = e.id || '';
+    if(!key) return true; // no ID — keep it
     if(seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -899,7 +871,6 @@ const wasNewDay = clearPreviousDayData();
   if(deduped.length < entries.length){
     entries = deduped;
     localStorage.setItem(K.entries, JSON.stringify(entries));
-    console.log('Removed '+(entries.length - deduped.length)+' duplicate entries');
   }
 })();
 
@@ -936,13 +907,12 @@ renderPeriod('week');
 renderPTO();
 renderOutreach();
 renderYTD();
-renderPayPeriod();
-renderCalendar();
 renderSyncStatus();
 renderCaseTags();
 renderProviders();
-// Deferred re-render for iOS Safari grid timing
-setTimeout(renderCalendar, 300);
+// Defer heavier renders for iOS Safari — ensures DOM and entries are ready
+setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
+setTimeout(renderCalendar, 500); // second pass for iOS grid paint
 setInterval(tick,1000);
 tick();
 // Request browser notification permission for clock-out reminders
@@ -1256,23 +1226,6 @@ function saveEntry(){
 
   if(total===0){toast('No hours to save — clock in first!','err');return;}
 
-  // ── DUPLICATE CHECK ──────────────────────────
-  // Prevent saving if an entry for this exact date with same total already exists
-  const existingToday = entries.filter(e =>
-    e.date === date &&
-    e.type !== 'PTO' &&
-    e.type !== 'Outreach'
-  );
-  if(existingToday.length > 0){
-    const sameTotalExists = existingToday.some(e =>
-      parseFloat(e.totalHrs) === parseFloat(total.toFixed(2))
-    );
-    if(sameTotalExists){
-      toast('⚠️ An entry for '+date+' with '+total.toFixed(2)+'h already exists — not saved again.','err');
-      return;
-    }
-  }
-
   // Build in/out strings: first-in to last-out per location
   const clinicIn  = S.clinic.sessions.length ? S.clinic.sessions[0].in  : (S.clinic.running ? msToHHMM(S.clinic.stamp) : '');
   const clinicOut = S.clinic.sessions.length ? S.clinic.sessions[S.clinic.sessions.length-1].out : '';
@@ -1306,9 +1259,6 @@ function saveEntry(){
     notes:fullNotes,
     cases:caseTags,
     providers:getProvidersString(),
-    clinicTotalPts: parseInt(document.getElementById('clinicTotalPts').value)||0,
-    clinicStaff:    parseInt(document.getElementById('clinicStaff').value)||0,
-    clinicSaw:      parseInt(document.getElementById('clinicSaw').value)||0,
     type:buildType(c,o,a), synced:false
   };
   submitEntry(entry);
@@ -1466,7 +1416,8 @@ function finishSave(entry,btn){
   document.getElementById('sessionDate').value = today();
   localStorage.setItem(K.date, today());
 
-  renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderPayPeriod(); renderCalendar(); renderSyncStatus(); resetForm();
+  renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderSyncStatus(); resetForm();
+  setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
   btn.disabled=false;
   btn.textContent=sheetUrl?'+ Save & Sync to Google Sheets':'+ Save Locally';
 
@@ -1501,7 +1452,6 @@ function resetForm(){
   localStorage.setItem(K.date,today());
   clearCaseTags();
   clearProviders();
-  clearClinicStats();
   refreshSummary(); updateBanner();
 }
 
@@ -2127,29 +2077,6 @@ function clearProviders(){
   renderProviders();
 }
 
-// ── CLINIC STATS ──────────────────────────────
-function updateClinicSeenPct(){
-  const total = parseInt(document.getElementById('clinicTotalPts').value) || 0;
-  const saw   = parseInt(document.getElementById('clinicSaw').value)      || 0;
-  const staff = parseInt(document.getElementById('clinicStaff').value)    || 0;
-  const el    = document.getElementById('clinicSeenPct');
-  if(!el) return;
-  if(total > 0 && saw > 0){
-    const pct = Math.round((saw / total) * 100);
-    const pps = staff > 0 ? ' · ' + (total / staff).toFixed(1) + ' pts/staff' : '';
-    el.textContent = saw + ' / ' + total + ' seen (' + pct + '%)' + pps;
-  } else {
-    el.textContent = '';
-  }
-}
-
-function clearClinicStats(){
-  const fields = ['clinicTotalPts','clinicStaff','clinicSaw'];
-  fields.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
-  const el = document.getElementById('clinicSeenPct');
-  if(el) el.textContent = '';
-}
-
 function getCaseTagsString(){
   if(!todayCases.length) return '';
   return todayCases.map((c,i)=>(i+1)+'. '+c).join(', ');
@@ -2299,10 +2226,6 @@ function renderCalendar(){
   </div>`;
 
   el.innerHTML = html;
-  // iOS Safari sometimes needs a nudge to paint grid content
-  if(el.offsetHeight < 50){
-    requestAnimationFrame(()=>{ el.style.display='none'; el.offsetHeight; el.style.display=''; });
-  }
 }
 
 function showCalendarEntry(dateStr){
