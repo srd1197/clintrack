@@ -1391,14 +1391,14 @@ function submitEntry(entry){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>Saving...';
 
   // Safety timeout — on iOS no-cors fetch may never resolve.
-  // After 3s, save locally regardless and treat as unsynced.
+  // After 5s, save locally regardless and treat as unsynced.
   const safetyReset = setTimeout(()=>{
     if(!finishCalled){
       finishCalled = true;
       entry.synced = false;
       finishSave(entry, btn);
     }
-  }, 3000);
+  }, 5000);
 
   if(sheetUrl){
     postToSheet(sheetUrl, entry, ok => {
@@ -1427,7 +1427,7 @@ function postToSheet(url, data, cb){
 }
 
 function finishSave(entry,btn){
-  // Guard against duplicate saves (e.g. safety timeout + fetch both resolving)
+  // Guard against duplicate saves
   if(entries.some(e => e.id === entry.id)){
     isSaving=false;
     btn.disabled=false;
@@ -1447,11 +1447,12 @@ function finishSave(entry,btn){
   document.getElementById('sessionDate').value = today();
   localStorage.setItem(K.date, today());
 
-  renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderSyncStatus(); resetForm();
-  setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
+  // Release button FIRST before any rendering that might cause issues
+  isSaving = false;
   btn.disabled=false;
   btn.textContent=sheetUrl?'+ Save & Sync to Google Sheets':'+ Save Locally';
 
+  // Show toast
   const isPTO=entry.type==='PTO';
   const isOutreach=entry.type==='Outreach';
   if(isPTO&&entry.synced)           toast('✅ PTO saved & synced! Balance updated.','ok');
@@ -1461,7 +1462,20 @@ function finishSave(entry,btn){
   else if(entry.synced)             toast('✅ Entry saved & synced to Google Sheets!','ok');
   else if(sheetUrl)                 toast('✅ Saved locally — will sync shortly.','warn');
   else                              toast('✅ Saved locally.','warn');
-  isSaving = false; // release lock only after everything is done
+
+  // Render everything after button is already released
+  renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderSyncStatus(); resetForm();
+  setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
+
+  // Hard fallback — ensure button never stays stuck
+  setTimeout(()=>{
+    const b = document.getElementById('saveBtn');
+    if(b && b.disabled){
+      b.disabled = false;
+      b.textContent = sheetUrl ? '+ Save & Sync to Google Sheets' : '+ Save Locally';
+      isSaving = false;
+    }
+  }, 500);
 }
 
 // ── RESET FORM ────────────────────────────────
