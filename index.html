@@ -637,6 +637,17 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- SAVE CONFIRMATION MODAL -->
+<div id="saveConfirmModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:2000;align-items:center;justify-content:center;padding:1.5rem;">
+  <div id="saveConfirmBox" style="background:#1e2a42;border:1px solid #334466;border-radius:20px;padding:2rem 1.75rem;width:100%;max-width:440px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <div id="saveConfirmIcon" style="font-size:3.5rem;line-height:1;margin-bottom:0.75rem;"></div>
+    <div id="saveConfirmTitle" style="font-family:'Fraunces',serif;font-size:1.6rem;font-weight:700;margin-bottom:0.4rem;"></div>
+    <div id="saveConfirmSub" style="font-size:0.78rem;color:#8da4c8;margin-bottom:1.25rem;line-height:1.5;font-family:'DM Mono',monospace;"></div>
+    <div id="saveConfirmDetails" style="background:#263350;border:1px solid #334466;border-radius:10px;padding:1rem;margin-bottom:1.5rem;text-align:left;font-family:'DM Mono',monospace;font-size:0.75rem;line-height:2;color:#c8d8f0;"></div>
+    <button onclick="closeSaveConfirm()" id="saveConfirmBtn" style="width:100%;padding:0.9rem;border:none;border-radius:10px;font-family:'DM Mono',monospace;font-size:0.85rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;color:#050d0a;">OK</button>
+  </div>
+</div>
+
 <!-- PTO SETTINGS MODAL -->
 <div class="modal-overlay" id="ptoSettingsModal" style="display:none" onclick="closePTOSettingsIfBg(event)">
   <div class="modal">
@@ -1452,16 +1463,8 @@ function finishSave(entry,btn){
   btn.disabled=false;
   btn.textContent=sheetUrl?'+ Save & Sync to Google Sheets':'+ Save Locally';
 
-  // Show toast
-  const isPTO=entry.type==='PTO';
-  const isOutreach=entry.type==='Outreach';
-  if(isPTO&&entry.synced)           toast('✅ PTO saved & synced! Balance updated.','ok');
-  else if(isPTO)                    toast('✅ PTO saved locally. Balance updated.','warn');
-  else if(isOutreach&&entry.synced) toast('✅ Outreach saved & synced!','ok');
-  else if(isOutreach)               toast('✅ Outreach saved locally.','warn');
-  else if(entry.synced)             toast('✅ Entry saved & synced to Google Sheets!','ok');
-  else if(sheetUrl)                 toast('✅ Saved locally — will sync shortly.','warn');
-  else                              toast('✅ Saved locally.','warn');
+  // Show save confirmation modal
+  showSaveConfirm(entry);
 
   // Render everything after button is already released
   renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderSyncStatus(); resetForm();
@@ -2431,6 +2434,92 @@ function toast(msg,type){
   const el=document.getElementById('toast');
   el.textContent=msg; el.className='toast show '+(type||'ok');
   clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),4500);
+}
+
+// ── SAVE CONFIRMATION MODAL ───────────────────
+function showSaveConfirm(entry) {
+  const modal  = document.getElementById('saveConfirmModal');
+  const icon   = document.getElementById('saveConfirmIcon');
+  const title  = document.getElementById('saveConfirmTitle');
+  const sub    = document.getElementById('saveConfirmSub');
+  const detail = document.getElementById('saveConfirmDetails');
+  const btn    = document.getElementById('saveConfirmBtn');
+  const box    = document.getElementById('saveConfirmBox');
+
+  const isPTO      = entry.type === 'PTO';
+  const isOutreach = entry.type === 'Outreach';
+  const synced     = entry.synced;
+  const hasUrl     = !!sheetUrl;
+
+  // Color + messaging by type
+  let accentColor = '#00ddb8'; // clinic teal default
+  if(isPTO)      accentColor = '#60a5fa';
+  if(isOutreach) accentColor = '#c4b5fd';
+
+  if(synced) {
+    icon.textContent  = '✅';
+    title.textContent = isPTO ? 'PTO Saved!' : isOutreach ? 'Outreach Saved!' : 'Session Saved!';
+    title.style.color = accentColor;
+    sub.textContent   = 'Saved locally and synced to Google Sheets.';
+    btn.style.background = accentColor;
+    box.style.borderTop  = '4px solid ' + accentColor;
+  } else if(hasUrl) {
+    icon.textContent  = '⚠️';
+    title.textContent = 'Saved Locally';
+    title.style.color = '#f59e0b';
+    sub.textContent   = 'Saved to this device. Google Sheets sync may be delayed.';
+    btn.style.background = '#f59e0b';
+    box.style.borderTop  = '4px solid #f59e0b';
+  } else {
+    icon.textContent  = '💾';
+    title.textContent = 'Saved Locally';
+    title.style.color = accentColor;
+    sub.textContent   = 'Saved to this device. Connect Google Sheets in Settings to sync.';
+    btn.style.background = accentColor;
+    box.style.borderTop  = '4px solid ' + accentColor;
+  }
+
+  // Build detail rows
+  let rows = '';
+  rows += '<span style="color:#8da4c8;font-size:0.65rem;letter-spacing:2px;">ENTRY SUMMARY</span><br>';
+  rows += '📅 ' + entry.date + ' &nbsp;|&nbsp; ' + entry.type + '<br>';
+
+  if(isPTO) {
+    rows += '🏖️ PTO Hours Used: <b style="color:#60a5fa">' + parseFloat(entry.totalHrs).toFixed(2) + 'h</b><br>';
+  } else if(isOutreach) {
+    rows += '📍 ' + (entry.location || 'Location not specified') + '<br>';
+    rows += '⏱️ ' + (entry.timeIn||'') + ' → ' + (entry.timeOut||'') + ' &nbsp;|&nbsp; <b style="color:#c4b5fd">' + parseFloat(entry.totalHrs).toFixed(2) + 'h</b><br>';
+  } else {
+    // Clinical session
+    const c = parseFloat(entry.clinicHrs)||0;
+    const o = parseFloat(entry.orHrs)||0;
+    const a = parseFloat(entry.adminHrs)||0;
+    const total = parseFloat(entry.totalHrs)||0;
+    const ot = parseFloat(entry.overtime)||0;
+    if(c>0) rows += '🏥 Clinic: <b style="color:#00ddb8">' + c.toFixed(2) + 'h</b>';
+    if(c>0 && entry.clinicIn) rows += ' &nbsp;(' + entry.clinicIn + '–' + (entry.clinicOut||'running') + ')';
+    if(c>0) rows += '<br>';
+    if(o>0) rows += '🔪 OR: <b style="color:#fb923c">' + o.toFixed(2) + 'h</b>';
+    if(o>0 && entry.orIn) rows += ' &nbsp;(' + entry.orIn + '–' + (entry.orOut||'running') + ')';
+    if(o>0) rows += '<br>';
+    if(a>0) rows += '💼 Admin: <b style="color:#c4b5fd">' + a.toFixed(2) + 'h</b>';
+    if(a>0 && entry.adminIn) rows += ' &nbsp;(' + entry.adminIn + '–' + (entry.adminOut||'running') + ')';
+    if(a>0) rows += '<br>';
+    rows += '⏱️ Total: <b style="color:' + accentColor + '">' + total.toFixed(2) + 'h</b>';
+    if(ot > 0) rows += ' &nbsp;<span style="color:#f43f5e">+' + ot.toFixed(2) + 'h OT</span>';
+    rows += '<br>';
+  }
+
+  rows += '<br><span style="font-size:0.68rem;color:' + (synced ? '#00ddb8' : hasUrl ? '#f59e0b' : '#8da4c8') + ';">' +
+    (synced ? '✔ Synced to Google Sheets' : hasUrl ? '○ Not yet synced to Google Sheets' : '○ Google Sheets not connected') +
+    '</span>';
+
+  detail.innerHTML = rows;
+  modal.style.display = 'flex';
+}
+
+function closeSaveConfirm() {
+  document.getElementById('saveConfirmModal').style.display = 'none';
 }
 </script>
 </body>
