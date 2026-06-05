@@ -895,6 +895,8 @@ function clearPreviousDayData() {
 }
 
 const wasNewDay = clearPreviousDayData();
+// Reload todayCases AFTER day reset (in case reset just cleared them)
+todayCases = JSON.parse(localStorage.getItem('ct_f_cases')||'[]');
 
 // ── DEDUPLICATE EXISTING ENTRIES ──────────────
 // Only remove entries with identical IDs (true duplicates from double-save bug)
@@ -1244,7 +1246,20 @@ function addManualSession(t){
 // ── SUMMARY ───────────────────────────────────
 function liveHrs(t){ return totalHrs(t); }
 function refreshSummary(){
-  const c=liveHrs('clinic'),o=liveHrs('or'),a=liveHrs('admin'),total=c+o+a;
+  let c=liveHrs('clinic'),o=liveHrs('or'),a=liveHrs('admin');
+
+  // If live S object shows 0 but a saved entry exists for today, use that instead.
+  // This covers the case where hours were entered via Add/Edit Session manually
+  // and s.hrs didn't recalculate before save.
+  const todayStr = today();
+  const todayEntry = entries.find(e => e.date === todayStr && e.type !== 'PTO' && e.type !== 'Outreach');
+  if(todayEntry && (c+o+a) === 0){
+    c = parseFloat(todayEntry.clinicHrs)||0;
+    o = parseFloat(todayEntry.orHrs)||0;
+    a = parseFloat(todayEntry.adminHrs)||0;
+  }
+
+  const total = c+o+a;
   const weekTotal = getWeekTotal();
   document.getElementById('sC').textContent  =c.toFixed(2)+'h';
   document.getElementById('sO').textContent  =o.toFixed(2)+'h';
@@ -1401,15 +1416,15 @@ function submitEntry(entry){
   const btn=document.getElementById('saveBtn');
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>Saving...';
 
-  // Safety timeout — on iOS no-cors fetch may never resolve.
-  // After 5s, save locally regardless and treat as unsynced.
+  // Safety timeout — on iOS no-cors fetch can be slow.
+  // After 12s, save locally as unsynced. If fetch resolves later, update synced flag.
   const safetyReset = setTimeout(()=>{
     if(!finishCalled){
       finishCalled = true;
       entry.synced = false;
       finishSave(entry, btn);
     }
-  }, 5000);
+  }, 12000);
 
   if(sheetUrl){
     postToSheet(sheetUrl, entry, ok => {
@@ -1418,8 +1433,15 @@ function submitEntry(entry){
         finishCalled = true;
         entry.synced = ok;
         finishSave(entry, btn);
+      } else if(ok) {
+        // Safety already fired but fetch succeeded — update synced status retroactively
+        const idx = entries.findIndex(e => e.id === entry.id);
+        if(idx !== -1){
+          entries[idx].synced = true;
+          localStorage.setItem(K.entries, JSON.stringify(entries));
+          renderSyncStatus();
+        }
       }
-      // if finishCalled already (safety fired first), ignore — entry already saved
     });
   } else {
     clearTimeout(safetyReset);
@@ -1972,13 +1994,13 @@ function saveOutreachSettings(){
 
 // ── CASE TAGGING ──────────────────────────────
 // todayCases is now an ordered array of strings e.g. ['R THA','L TKA']
-// Max 5 cases per day
+// Max 8 cases per day
 
 let _selectingProc = null; // procedure name currently awaiting laterality
 
 function selectProc(proc){
   cancelProc(); // close any open picker first
-  if(todayCases.length >= 5){ toast('Max 5 cases per day','err'); return; }
+  if(todayCases.length >= 8){ toast('Max 8 cases per day','err'); return; }
   _selectingProc = proc;
   // Highlight the tapped chip
   document.querySelectorAll('.proc-chip').forEach(b=>{
@@ -1992,7 +2014,7 @@ function selectProc(proc){
 
 function selectCustomProc(){
   cancelProc();
-  if(todayCases.length >= 5){ toast('Max 5 cases per day','err'); return; }
+  if(todayCases.length >= 8){ toast('Max 8 cases per day','err'); return; }
   _selectingProc = '__custom__';
   document.getElementById('customProcRow').style.display = 'block';
   document.getElementById('latPicker').classList.remove('show');
@@ -2137,7 +2159,7 @@ function renderSyncStatus(){
   let el = document.getElementById('syncStatusBadge');
   if(!el) return;
   if(unsynced > 0){
-    el.textContent = '⚠️ '+unsynced+' unsynced';
+    el.innerHTML = '⚠️ '+unsynced+' unsynced &nbsp;<span style="text-decoration:underline;cursor:pointer;font-size:0.7rem;" onclick="retrySyncAll()">retry</span>';
     el.style.display='inline-block';
     el.style.color='var(--ot)';
   } else {
@@ -2145,6 +2167,38 @@ function renderSyncStatus(){
     el.style.display='inline-block';
     el.style.color='var(--clinic)';
   }
+}
+
+function retrySyncAll(){
+  if(!sheetUrl){ toast('No Google Sheets URL connected','err'); return; }
+  const unsynced = entries.filter(e=>!e.synced);
+  if(!unsynced.length){ toast('All entries already synced!','ok'); return; }
+  toast('Retrying sync for '+unsynced.length+' entries...','warn');
+  let completed = 0;
+  unsynced.forEach(entry => {
+    const formData = new FormData();
+    Object.entries(entry).forEach(([k,v]) => formData.append(k, String(v??'')));
+    fetch(sheetUrl, { method:'POST', body:formData, mode:'no-cors' })
+      .then(() => {
+        const idx = entries.findIndex(e => e.id === entry.id);
+        if(idx !== -1){ entries[idx].synced = true; }
+        completed++;
+        if(completed === unsynced.length){
+          localStorage.setItem(K.entries, JSON.stringify(entries));
+          renderSyncStatus();
+          renderLog();
+          toast('✅ Sync complete! '+completed+' entries synced.','ok');
+        }
+      })
+      .catch(() => {
+        completed++;
+        if(completed === unsynced.length){
+          localStorage.setItem(K.entries, JSON.stringify(entries));
+          renderSyncStatus();
+          toast('Some entries may not have synced — check your sheet.','warn');
+        }
+      });
+  });
 }
 
 // ── PAY PERIOD SUMMARY ────────────────────────
