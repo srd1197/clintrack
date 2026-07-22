@@ -285,12 +285,11 @@
       <div class="provider-section">
         <div class="case-tag-lbl">👤 Providers Today — tap to add</div>
         <div class="proc-chips" style="margin-bottom:0.5rem;">
-          <button class="provider-chip" onclick="addProvider('Anderson')">Anderson</button>
+          <button class="provider-chip" onclick="addProvider('Post-Op')">Post-Op</button>
           <button class="provider-chip" onclick="addProvider('Heller')">Heller</button>
-          <button class="provider-chip" onclick="addProvider('Herseth')">Herseth</button>
-          <button class="provider-chip" onclick="addProvider('Lafferty')">Lafferty</button>
           <button class="provider-chip" onclick="addProvider('Megan')">Megan</button>
           <button class="provider-chip" onclick="addProvider('Jon')">Jon</button>
+          <button class="provider-chip" onclick="addProvider('Anderson')">Anderson</button>
           <button class="provider-chip" onclick="openCustomProvider()" style="border-style:dashed;">+ Other</button>
         </div>
         <!-- Custom provider input -->
@@ -394,6 +393,7 @@
         <!-- Running case list -->
         <div class="case-list" id="caseList"></div>
         <div class="case-tag-summary" id="caseTagSummary"></div>
+        <div id="caseSyncNote" style="font-size:0.62rem;color:var(--muted);font-family:'DM Mono',monospace;min-height:0.9rem;margin-top:0.15rem;"></div>
       </div>
     </div>
 
@@ -943,14 +943,22 @@ document.getElementById('sessionDate').addEventListener('change', e => {
     userEditingDate = false;
   }
 });
-renderLog();
-renderPeriod('week');
-renderPTO();
-renderOutreach();
-renderYTD();
-renderSyncStatus();
-renderCaseTags();
-renderProviders();
+// Each boot render runs in isolation — one failure can't stop the rest
+// (previously a throw in renderYTD/renderPTO would silently skip renderCaseTags,
+//  leaving the case list blank while todayCases still held entries)
+[
+  ['renderLog',        renderLog],
+  ['renderPeriod',     ()=>renderPeriod('week')],
+  ['renderPTO',        renderPTO],
+  ['renderOutreach',   renderOutreach],
+  ['renderYTD',        renderYTD],
+  ['renderSyncStatus', renderSyncStatus],
+  ['renderCaseTags',   renderCaseTags],
+  ['renderProviders',  renderProviders],
+  ['hydrateCases',     hydrateCasesFromSavedEntry]
+].forEach(([name, fn])=>{
+  try { fn(); } catch(err){ console.error('ClinTrack boot render failed: '+name, err); }
+});
 // Defer heavier renders for iOS Safari — ensures DOM and entries are ready
 setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
 setTimeout(renderCalendar, 500); // second pass for iOS grid paint
@@ -1490,6 +1498,7 @@ function finishSave(entry,btn){
 
   // Render everything after button is already released
   renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderSyncStatus(); resetForm();
+  hydrateCasesFromSavedEntry();
   setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
 
   // Hard fallback — ensure button never stays stuck
@@ -1994,13 +2003,14 @@ function saveOutreachSettings(){
 
 // ── CASE TAGGING ──────────────────────────────
 // todayCases is now an ordered array of strings e.g. ['R THA','L TKA']
-// Max 8 cases per day
+// Max cases per day
+const MAX_CASES = 24;
 
 let _selectingProc = null; // procedure name currently awaiting laterality
 
 function selectProc(proc){
   cancelProc(); // close any open picker first
-  if(todayCases.length >= 8){ toast('Max 8 cases per day','err'); return; }
+  if(todayCases.length >= MAX_CASES){ toast('Case limit reached ('+todayCases.length+'/'+MAX_CASES+') — delete one to add another','err'); return; }
   _selectingProc = proc;
   // Highlight the tapped chip
   document.querySelectorAll('.proc-chip').forEach(b=>{
@@ -2010,11 +2020,14 @@ function selectProc(proc){
   document.getElementById('latProcLabel').textContent = proc + ' —';
   document.getElementById('latPicker').classList.add('show');
   document.getElementById('customProcRow').style.display = 'none';
+  // Make sure the L/R/Bilateral bar is actually on screen — the case isn't
+  // logged until one of those is tapped
+  try { document.getElementById('latPicker').scrollIntoView({block:'nearest', behavior:'smooth'}); } catch(e){}
 }
 
 function selectCustomProc(){
   cancelProc();
-  if(todayCases.length >= 8){ toast('Max 8 cases per day','err'); return; }
+  if(todayCases.length >= MAX_CASES){ toast('Case limit reached ('+todayCases.length+'/'+MAX_CASES+') — delete one to add another','err'); return; }
   _selectingProc = '__custom__';
   document.getElementById('customProcRow').style.display = 'block';
   document.getElementById('latPicker').classList.remove('show');
@@ -2037,6 +2050,7 @@ function addCase(side){
   localStorage.setItem(K.cases, JSON.stringify(todayCases));
   cancelProc();
   renderCaseTags();
+  resyncTodayTags();
   if(navigator.vibrate) navigator.vibrate(40);
 }
 
@@ -2048,6 +2062,7 @@ function addCustomCaseWithSide(side){
   localStorage.setItem(K.cases, JSON.stringify(todayCases));
   cancelProc();
   renderCaseTags();
+  resyncTodayTags();
   if(navigator.vibrate) navigator.vibrate(40);
 }
 
@@ -2055,6 +2070,7 @@ function removeCase(idx){
   todayCases.splice(idx, 1);
   localStorage.setItem(K.cases, JSON.stringify(todayCases));
   renderCaseTags();
+  resyncTodayTags();
 }
 
 function cancelProc(){
@@ -2096,9 +2112,15 @@ function clearCaseTags(){
 
 // ── PROVIDER TAGGING (Clinic) ──────────────────
 function addProvider(name){
+  // Guard against a fat-fingered double tap putting the same name in twice
+  if(todayProviders.some(p => p.toLowerCase() === String(name).toLowerCase())){
+    toast(name + ' already added','warn');
+    return;
+  }
   todayProviders.push(name);
   localStorage.setItem(K.providers, JSON.stringify(todayProviders));
   renderProviders();
+  resyncTodayTags();
   if(navigator.vibrate) navigator.vibrate(40);
 }
 
@@ -2106,6 +2128,7 @@ function removeProvider(idx){
   todayProviders.splice(idx,1);
   localStorage.setItem(K.providers, JSON.stringify(todayProviders));
   renderProviders();
+  resyncTodayTags();
 }
 
 function openCustomProvider(){
@@ -2151,6 +2174,94 @@ function clearProviders(){
 function getCaseTagsString(){
   if(!todayCases.length) return '';
   return todayCases.map((c,i)=>(i+1)+'. '+c).join(', ');
+}
+
+// ── POST-SAVE CASE RESYNC ─────────────────────
+// Once a day is saved, todayCases is cleared by resetForm(). These helpers keep the
+// case chips wired to the already-saved entry so cases added afterwards land in the
+// same Sheets row instead of a fresh, orphaned list.
+
+// Inverse of getCaseTagsString(): "1. R TKA, 2. L THA" -> ['R TKA','L THA']
+function parseCaseTagsString(str){
+  if(!str) return [];
+  return String(str).split(/,\s*/)
+    .map(s => s.replace(/^\s*\d+\.\s*/, '').trim())
+    .filter(Boolean);
+}
+
+// Index in entries[] of the saved regular entry for the date currently in the form.
+// PTO and Outreach rows never carry cases, so they're skipped.
+function todaySavedEntryIdx(){
+  const d = document.getElementById('sessionDate')?.value || today();
+  return entries.findIndex(e => e.date === d && e.type !== 'PTO' && e.type !== 'Outreach');
+}
+
+// On boot and after a save, pull the saved entry's cases and providers back in so the
+// chips keep appending to the real list rather than starting over at zero.
+function hydrateCasesFromSavedEntry(){
+  const idx = todaySavedEntryIdx();
+  if(idx === -1) return;
+  const savedCases = parseCaseTagsString(entries[idx].cases);
+  const savedProvs = String(entries[idx].providers || '').split(/,\s*/).map(s=>s.trim()).filter(Boolean);
+  if(!savedCases.length && !todayCases.length && !savedProvs.length && !todayProviders.length) return;
+  todayCases = savedCases;
+  todayProviders = savedProvs;
+  localStorage.setItem(K.cases, JSON.stringify(todayCases));
+  localStorage.setItem(K.providers, JSON.stringify(todayProviders));
+  renderCaseTags();
+  renderProviders();
+  const noteEl = document.getElementById('caseSyncNote');
+  if(noteEl){
+    noteEl.style.color = 'var(--muted)';
+    noteEl.textContent = '🔗 linked to saved entry — new cases & providers resync automatically';
+  }
+}
+
+let _caseResyncTimer = null;
+
+// Called after every case add/remove. Writes through to the saved entry immediately
+// (so a reload can't lose it) and debounces only the network post.
+function resyncTodayTags(){
+  const idx = todaySavedEntryIdx();
+  const noteEl = document.getElementById('caseSyncNote');
+  if(idx === -1){ if(noteEl) noteEl.textContent = ''; return; }
+
+  // Local write-through first — survives a refresh even if the post never fires
+  entries[idx].cases     = getCaseTagsString();
+  entries[idx].providers = getProvidersString();
+  entries[idx].synced    = false;
+  localStorage.setItem(K.entries, JSON.stringify(entries));
+  renderLog();
+  renderSyncStatus();
+
+  if(!sheetUrl){
+    if(noteEl){ noteEl.style.color = 'var(--muted)'; noteEl.textContent = '✎ added to saved entry (local only)'; }
+    return;
+  }
+
+  if(noteEl){ noteEl.style.color = 'var(--muted)'; noteEl.textContent = '↻ resyncing to saved entry...'; }
+
+  clearTimeout(_caseResyncTimer);
+  _caseResyncTimer = setTimeout(()=>{
+    const i = todaySavedEntryIdx();
+    if(i === -1) return;
+    const entryId = entries[i].id;
+    postToSheet(sheetUrl, entries[i], ok => {
+      const j = entries.findIndex(e => e.id === entryId);
+      if(j !== -1){
+        entries[j].synced = ok;
+        localStorage.setItem(K.entries, JSON.stringify(entries));
+      }
+      renderLog();
+      renderSyncStatus();
+      const n = document.getElementById('caseSyncNote');
+      if(n){
+        n.style.color   = ok ? 'var(--clinic)' : 'var(--ot)';
+        n.textContent   = ok ? '✓ cases & providers resynced'
+                             : '⚠ resync failed — tap retry in the sync badge';
+      }
+    });
+  }, 1200);
 }
 
 // ── SYNC STATUS INDICATOR ─────────────────────
