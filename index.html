@@ -508,9 +508,11 @@
     </div>
   </div>
 
-  <!-- ALL DAY PTO BUTTON -->
-  <div class="pto-row">
-    <button class="btn-pto" onclick="savePTO()">🌴✈️ Log All Day PTO (8h)</button>
+  <!-- PTO LOGGING BUTTONS -->
+  <div class="pto-row" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+    <button class="btn-pto" style="flex:1;min-width:110px;" onclick="savePTO(8)">🌴 Full Day (8h)</button>
+    <button class="btn-pto" style="flex:1;min-width:110px;" onclick="savePTO(4)">🌤 Half Day (4h)</button>
+    <button class="btn-pto" style="flex:1;min-width:110px;" onclick="savePTOCustom()">⏱ Custom…</button>
   </div>
 
   <!-- OUTREACH BUTTON -->
@@ -1405,20 +1407,36 @@ function saveOutreach(){
 }
 
 // ── ALL DAY PTO ───────────────────────────────
-function savePTO(){
+function savePTO(hours){
   const date=document.getElementById('sessionDate').value;
   if(!date){toast('Please pick a date first!','err');return;}
-  if(!confirm('Log a full day PTO (8 hours) for '+date+'?'))return;
+  // Default to a full day if called with no argument.
+  const h = Math.round((parseFloat(hours==null?8:hours)||0)*100)/100;
+  if(!(h>0)){toast('Enter a valid number of PTO hours','err');return;}
+  const label = h===8 ? 'All Day PTO'
+              : h===4 ? 'Half Day PTO (4h)'
+              : 'PTO — '+h+'h';
+  if(!confirm('Log '+h+'h PTO for '+date+'?'))return;
   const entry={
     id: Date.now().toString(),
     date,
     clinicIn:'', clinicOut:'', orIn:'', orOut:'', adminIn:'', adminOut:'',
     clinicHrs:'0.00', orHrs:'0.00', adminHrs:'0.00',
-    totalHrs:'8.00', overtime:'0.00',
-    notes:'All Day PTO',
+    totalHrs: h.toFixed(2), overtime:'0.00',
+    notes: label,
     type:'PTO', synced:false
   };
   submitEntry(entry);
+}
+
+// Log an arbitrary number of PTO hours (a few hours, partial day, etc.)
+function savePTOCustom(){
+  const raw = prompt('How many PTO hours to log for the selected date?\n(e.g. 2, 3.5, 6)');
+  if(raw===null) return; // user cancelled
+  const h = parseFloat(raw);
+  if(!(h>0)){ toast('Enter a valid number of hours','err'); return; }
+  if(h>24){ toast('That is more than 24h — check the number','err'); return; }
+  savePTO(h);
 }
 
 // ── SHARED SUBMIT ─────────────────────────────
@@ -1744,7 +1762,7 @@ function renderPeriod(tab) {
   // Totals — exclude PTO and Outreach from worked hours
   let tC=0, tO=0, tA=0, tTotal=0, tOutreach=0, ptoDays=0, outreachDays=0;
   filtered.forEach(e => {
-    if (e.type==='PTO')      { ptoDays++;      return; }
+    if (e.type==='PTO')      { ptoDays += (parseFloat(e.totalHrs)||0)/8; return; }
     if (e.type==='Outreach') { outreachDays++; tOutreach += parseFloat(e.totalHrs)||0; return; }
     tC     += parseFloat(e.clinicHrs)||0;
     tO     += parseFloat(e.orHrs)||0;
@@ -1777,7 +1795,7 @@ function renderPeriod(tab) {
       <div><div class="pg-lbl">Total Worked</div><div class="pg-val t">${tTotal.toFixed(2)}h</div></div>
       ${tOutreach>0?`<div><div class="pg-lbl">Outreach</div><div class="pg-val" style="color:var(--accent)">${tOutreach.toFixed(2)}h</div></div>`:''}
     </div>
-    ${ptoDays>0?`<div style="font-size:0.72rem;color:var(--ot);margin-bottom:0.75rem">🌴✈️ ${ptoDays} PTO day${ptoDays>1?'s':''} this period</div>`:''}
+    ${ptoDays>0?`<div style="font-size:0.72rem;color:var(--ot);margin-bottom:0.75rem">🌴✈️ ${(Math.round(ptoDays*100)/100)} PTO day${ptoDays!==1?'s':''} this period (${(ptoDays*8).toFixed(2)}h)</div>`:''}
     ${outreachDays>0?`<div style="font-size:0.72rem;color:var(--accent);margin-bottom:0.75rem">📣 ${outreachDays} Outreach event${outreachDays>1?'s':''} — ${tOutreach.toFixed(2)}h (not counted in worked hours)</div>`:''}
     <div class="period-days">${dayRows}</div>`;
 }
@@ -2530,7 +2548,7 @@ function renderYTD(){
   const workedDates = new Set();
 
   yearEntries.forEach(e => {
-    if(e.type==='PTO')      { ptoDays++; return; }
+    if(e.type==='PTO')      { ptoDays += (parseFloat(e.totalHrs)||0)/8; return; }
     if(e.type==='Outreach') { tOutreach += parseFloat(e.totalHrs)||0; return; }
     tClinic += parseFloat(e.clinicHrs)||0;
     tOR     += parseFloat(e.orHrs)||0;
@@ -2558,7 +2576,7 @@ function renderYTD(){
   document.getElementById('ytdTotal').textContent   = tTotal.toFixed(2)+'h';
   document.getElementById('ytdAvgWeek').textContent = avgWeek+'h';
   document.getElementById('ytdDays').textContent    = workedDays;
-  document.getElementById('ytdPTODays').textContent = ptoDays;
+  document.getElementById('ytdPTODays').textContent = Math.round(ptoDays*100)/100;
   document.getElementById('ytdOutreach').textContent= tOutreach.toFixed(2)+'h';
   document.getElementById('ytdORDays').textContent  = orDays;
   document.getElementById('ytdExtra').innerHTML     =
