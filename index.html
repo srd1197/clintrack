@@ -926,7 +926,10 @@ document.getElementById('notes').value       = localStorage.getItem(K.notes) || 
 document.getElementById('notes').addEventListener('input',()=>localStorage.setItem(K.notes,document.getElementById('notes').value));
 document.getElementById('sessionDate').addEventListener('change', e => {
   const chosen = e.target.value;
+  const prevDate = localStorage.getItem(K.date) || today();
   localStorage.setItem(K.date, chosen);
+  // Swap the case/provider chips over to the chosen day's saved entry
+  try { loadTagsForSelectedDate(prevDate, chosen); } catch(err){ console.error('loadTagsForSelectedDate', err); }
   // If user picks a past date, set flag so tick doesn't reset it
   userEditingDate = chosen !== today();
   if(userEditingDate){
@@ -1511,6 +1514,8 @@ function finishSave(entry,btn){
   // Render everything after button is already released
   renderLog(); renderPeriod(activePeriodTab); renderPTO(); renderOutreach(); renderYTD(); renderSyncStatus(); resetForm();
   hydrateCasesFromSavedEntry();
+  // Saved a past day → bring back today's parked chips
+  if(localStorage.getItem(TODAY_TAG_STASH)) loadTagsForSelectedDate(today(), today());
   setTimeout(()=>{ renderPayPeriod(); renderCalendar(); }, 150);
 
   // Hard fallback — ensure button never stays stuck
@@ -2264,6 +2269,44 @@ function hydrateCasesFromSavedEntry(){
   if(noteEl){
     noteEl.style.color = 'var(--muted)';
     noteEl.textContent = '🔗 linked to saved entry — new cases & providers resync automatically';
+  }
+}
+
+// When the date picker changes, point the case/provider chips at THAT day's saved
+// entry. Previously the chips kept today's list, so tapping a case for yesterday
+// either went nowhere or overwrote yesterday's saved cases with today's list.
+const TODAY_TAG_STASH = 'ct_f_today_tag_stash';
+function loadTagsForSelectedDate(prevDate, chosen){
+  const t = today();
+  if(prevDate === chosen && !(chosen === t && localStorage.getItem(TODAY_TAG_STASH))) return; // same date, nothing to swap
+  // Leaving today → park today's unsaved chips so they come back afterwards
+  if(prevDate === t && chosen !== t){
+    localStorage.setItem(TODAY_TAG_STASH, JSON.stringify({cases:todayCases, providers:todayProviders}));
+  }
+  const idx = todaySavedEntryIdx();
+  if(idx !== -1){
+    todayCases     = parseCaseTagsString(entries[idx].cases);
+    todayProviders = String(entries[idx].providers || '').split(/,\s*/).map(s=>s.trim()).filter(Boolean);
+  } else if(chosen === t){
+    let stash = {};
+    try { stash = JSON.parse(localStorage.getItem(TODAY_TAG_STASH) || '{}'); } catch(e){}
+    todayCases     = Array.isArray(stash.cases) ? stash.cases : [];
+    todayProviders = Array.isArray(stash.providers) ? stash.providers : [];
+  } else {
+    todayCases = []; todayProviders = [];
+  }
+  if(chosen === t) localStorage.removeItem(TODAY_TAG_STASH);
+  localStorage.setItem(K.cases, JSON.stringify(todayCases));
+  localStorage.setItem(K.providers, JSON.stringify(todayProviders));
+  cancelProc();
+  renderCaseTags();
+  renderProviders();
+  const noteEl = document.getElementById('caseSyncNote');
+  if(noteEl){
+    noteEl.style.color = 'var(--muted)';
+    if(idx !== -1)        noteEl.textContent = '🔗 editing saved entry for ' + chosen + ' — cases resync automatically';
+    else if(chosen !== t) noteEl.textContent = 'No saved entry for ' + chosen + ' yet — cases will save with it when you tap Save';
+    else                  noteEl.textContent = '';
   }
 }
 
